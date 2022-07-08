@@ -1,0 +1,49 @@
+#!/usr/bin/env ruby
+# coding: utf-8
+Vagrant.configure("2") do |config|
+  config.vm.box = "StefanScherer/windows_2019_docker"
+  config.vm.hostname = "DC01-LDAP-LAB"
+  config.vm.network "public_network", ip: "192.168.12.1", hostname: true
+  config.vm.provision "shell", inline: <<-SCRIPT
+    docker image pull mcr.microsoft.com/windows/nanoserver:1809
+    docker image tag mcr.microsoft.com/windows/nanoserver:1809 microsoft/nanoserver:latest
+    mkdir C:\k
+    cd C:\k
+    $ProgressPreference=’SilentlyContinue’
+    iwr -outf kubernetes-node-windows-amd64.tar.gz "https://dl.k8s.io/v1.15.1/kubernetes-node-windows-amd64.tar.gz"
+    tar -xkf kubernetes-node-windows-amd64.tar.gz -C C:\k
+    mv C:\k\kubernetes\node\bin\*.exe C:\k
+  SCRIPT
+
+  config.vm.provision "shell", inline: <<-SCRIPT
+    $NetworkMode="overlay"
+    $ClusterCIDR="10.244.0.0/16"
+    $KubeDnsServiceIP="10.96.0.10"
+    $ServiceCIDR="10.96.0.0/12"
+    $InterfaceName="Ethernet"
+    $LogDir="C:\k\logs"
+    $BaseDir = "c:\k"
+    $NetworkMode = $NetworkMode.ToLower()
+    $NetworkName = "vxlan0"
+    $GithubSDNRepository = 'Microsoft/SDN'
+    $helper = "c:\k\helper.psm1"
+    if (!(Test-Path $helper))
+    {
+    Start-BitsTransfer "https://raw.githubusercontent.com/$GithubSDNRepository/master/Kubernetes/windows/helper.psm1" -Destination c:\k\helper.psm1
+    }
+    ipmo $helper
+    $install = "c:\k\install.ps1"
+    if (!(Test-Path $install))
+    {
+        Start-BitsTransfer "https://raw.githubusercontent.com/$GithubSDNRepository/master/Kubernetes/windows/install.ps1" -Destination c:\k\install.ps1
+    }
+    powershell $install -NetworkMode "$NetworkMode" -clusterCIDR "$ClusterCIDR" -KubeDnsServiceIP "$KubeDnsServiceIP" -serviceCIDR "$ServiceCIDR" -InterfaceName "'$InterfaceName'" -LogDir "$LogDir"
+  SCRIPT
+
+  config.vm.provision "shell", inline: <<-SCRIPT
+    $BaseDir = "c:\k"
+    powershell $BaseDir\start-kubelet.ps1 -RegisterOnly -NetworkMode $NetworkMode
+    ipmo C:\k\hns.psm1
+    RegisterNode
+  SCRIPT
+end
